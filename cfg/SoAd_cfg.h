@@ -7,20 +7,38 @@
 #include <TcpIp.h>
 
 
+typedef enum {
+    SOAD_UPPER_LAYER_TYPE_IF,
+    SOAD_UPPER_LAYER_TYPE_TP,
+    SOAD_UPPER_LAYER_TYPE_MAX
+} SoAdTxUpperLayerType;
+
+
+typedef struct {
+    uint16 tx_pdu_id;
+    SoAdTxUpperLayerType ul_type;
+    uint16 pdu_hdr_id;
+    uint16 socon_id;
+    uint16 socon_grp_id;
+} SoAdPduRouteType;
+
+
 
 typedef struct {
     uint16 rem_skt_id;  /* remote socket id */
     uint16 gen_skt_id;  /* the tool generated id, for verification purposes */
     uint16 skt_grp_id;  /* remote socket group */
-    uint16 loc_skt_id;  /* local socket id ref */
+    uint16 tcpip_skt_id;  /* local socket id ref */
     uint16 rem_ip[16];  /* remote ip (ipv6 or ipv4) */
     uint16 rem_port;    /* remote port number */
     TcpIp_ProtocolType protocol;
-    TcpIpDomainType domain_type;
 } SoAdSocketConnectionType;
 
 
-#define MAX_SOCKET_CONNS (5)
+#define SOAD_TOTAL_PDU_ROUTES (3)
+#define SOAD_TOTAL_SOCKET_CONNS (5)
+#define SOAD_SOCK_CONNS_MAX_CFG (20)
+
 
 typedef struct {
     SoAdSocketConnectionType *socon;
