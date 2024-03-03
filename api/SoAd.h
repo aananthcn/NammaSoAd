@@ -26,6 +26,7 @@
 
 #include <ComStack_Types.h>
 #include <TcpIp.h>
+#include <SoAd_cfg.h>
 
 
 typedef uint16_t SoAd_SoConIdType;
@@ -43,9 +44,6 @@ typedef enum {
 } SoAd_SoConModeType; 
 
 
-
-
-typedef uint8_t SoAd_ConfigType; // TODO: define correctly in SoAd_cfg.h and delete this line
 
 
 // General functions

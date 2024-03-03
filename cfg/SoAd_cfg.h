@@ -46,6 +46,8 @@ typedef struct {
 
 
 extern const SoAd_ConfigType SoAd_Config;
+extern const SoAdPduRouteType SoAdPduRouteConfigs[SOAD_TOTAL_PDU_ROUTES];
+extern const SoAdSocketConnectionType SoAdSocketConnectionConfigs[SOAD_TOTAL_SOCKET_CONNS];
 
 
 #endif
