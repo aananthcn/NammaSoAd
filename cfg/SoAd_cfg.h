@@ -28,16 +28,19 @@ typedef struct {
     uint16 rem_skt_id;  /* remote socket id */
     uint16 gen_skt_id;  /* the tool generated id, for verification purposes */
     uint16 skt_grp_id;  /* remote socket group */
-    uint16 tcpip_skt_id;  /* local socket id ref */
-    uint16 rem_ip[16];  /* remote ip (ipv6 or ipv4) */
+    uint16 loc_ipaddr_id;  /* local socket id ref */
+    uint16 loc_port;    /* from sock. group */
+    uint16 rem_ip[8];  /* remote ip (ipv6 or ipv4) */
     uint16 rem_port;    /* remote port number */
     TcpIp_ProtocolType protocol;
+    TcpIpDomainType ip_version;
+    boolean is_tcp_server;
 } SoAdSocketConnectionType;
 
 
-#define SOAD_TOTAL_PDU_ROUTES (3)
-#define SOAD_TOTAL_SOCKET_CONNS (5)
-#define SOAD_SOCK_CONNS_MAX_CFG (20)
+#define SOAD_TOTAL_PDU_ROUTES (4)
+#define SOAD_TOTAL_SOCKET_CONNS (4)
+#define SOAD_SOCK_CONNS_MAX_CFG (0)
 
 
 typedef struct {

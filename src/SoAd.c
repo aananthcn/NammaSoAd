@@ -24,22 +24,47 @@
 #include <tcpip_extensions.h>
 
 
-
-struct SocketControl {
-        SoAd_SoConIdType sock_id;
-        SoAd_SoConModeType sock_mode;
-        TcpIp_DomainType ip_version;
-        TcpIp_ProtocolType protocol;
-        TcpIp_StateType tcp_state;
-};
-
-struct SocketControl SockCtrlDataBlock[SOAD_TOTAL_SOCKET_CONNS];
-
-
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(SoAd, LOG_LEVEL_DBG);
 
 
+
+///////////////////////////////////////////////////////////////////////////////
+// SoAd data structures
+typedef enum SoAdSocketState {
+        SOAD_SOCON_OFF,
+        SOAD_SOCON_OPEN_REQ,
+	SOAD_SOCON_BIND_REQ,
+        SOAD_SOCON_CONNECTWAIT,
+	SOAD_SOCON_CONNECTED,
+        SOAD_SOCON_MAX_STATE
+} SoAdSocketStateType;
+
+
+typedef struct SoAdSocketData {
+        SoAd_SoConModeType sock_mode; /* OFFLINE, RECONNECT, ONLINE */
+        TcpIp_DomainType ip_version;
+        TcpIp_ProtocolType protocol;
+        SoAdSocketStateType sock_state;
+} SoAdSocketDataType;
+
+
+typedef struct CarOsSocket {
+        SoAdSocketDataType *d; //d for data or RAM
+        SoAdSocketConnectionType *c; //c for config
+} CarOsSocketType;
+
+
+
+///////////////////////////////////////////////////////////////////////////////
+// globals
+SoAdSocketDataType SoAdSockDataBlock[SOAD_TOTAL_SOCKET_CONNS];
+
+
+
+
+///////////////////////////////////////////////////////////////////////////////
+// Information and Control APIs
 
 // Returns socket connection index related to the specified TxPduId.
 Std_ReturnType SoAd_GetSoConId(PduIdType TxPduId, SoAd_SoConIdType* SoConIdPtr) {
@@ -47,6 +72,7 @@ Std_ReturnType SoAd_GetSoConId(PduIdType TxPduId, SoAd_SoConIdType* SoConIdPtr) 
 
         if (TxPduId >= SOAD_TOTAL_PDU_ROUTES) {
                 LOG_ERR("TxPduId (%d) is >= maximumum limit (%d)", TxPduId, SOAD_TOTAL_PDU_ROUTES);
+                SoConIdPtr = NULL;
                 return E_NOT_OK;
         }
 
@@ -62,6 +88,12 @@ Std_ReturnType SoAd_GetSoConId(PduIdType TxPduId, SoAd_SoConIdType* SoConIdPtr) 
 Std_ReturnType SoAd_OpenSoCon(SoAd_SoConIdType SoConId) {
         Std_ReturnType retval = E_OK;
 
+        if (SoConId >= SOAD_TOTAL_SOCKET_CONNS) {
+                LOG_ERR("SoConId (%d) is >= maximumum limit (%d)", SoConId, SOAD_TOTAL_SOCKET_CONNS);
+                return E_NOT_OK;
+        }
+
+        SoAdSockDataBlock[SoConId].sock_state = SOAD_SOCON_OPEN_REQ;
 
         return retval;
 }
@@ -104,4 +136,134 @@ Std_ReturnType SoAd_ReleaseIpAddrAssignment(SoAd_SoConIdType SoConId) {
 
 
         return retval;
+}
+
+
+
+///////////////////////////////////////////////////////////////////////////////
+// internal functions for SoAd_MainFunction()
+
+void soad_connect_tcp_socket(u16 sk_id, CarOsSocketType *sock) {
+        TcpIp_SockAddrType rem_addr;
+
+        if (sock->c->is_tcp_server) {
+                if (TcpIp_getConnState(sk_id) > TCPIP_SYN_SENT) {
+                        sock->d->sock_state = SOAD_SOCON_CONNECTED;
+                }
+        }
+        else {
+                // As per spec TcpIp_SoAdGetSocket() needs to be called, in order to
+                // get a socket from a pool. But Car-OS takes an approach to keep all
+                // sockets statically configured, hence this call is not made, for now.
+
+                // Hence, compute rem_addr & call TcpIp_TcpConnect() directly, as below
+                if (sock->c->ip_version == TCPIP_AF_INET6) {
+                        // TODO: The ipv6 address setting in line below needs to be tested
+                        rem_addr.inet6.addr[0] = sock->c->rem_ip[0] << 16 | sock->c->rem_ip[1];
+                        rem_addr.inet6.addr[1] = sock->c->rem_ip[2] << 16 | sock->c->rem_ip[3];
+                        rem_addr.inet6.addr[2] = sock->c->rem_ip[4] << 16 | sock->c->rem_ip[5];
+                        rem_addr.inet6.addr[3] = sock->c->rem_ip[6] << 16 | sock->c->rem_ip[7];
+
+                        rem_addr.inet6.port = sock->c->rem_port;
+                        rem_addr.inet6.domain = TCPIP_AF_INET6;
+                }
+                else {
+                        rem_addr.inet4.addr[0] = IPv4_2_U32(sock->c->rem_ip[0],
+                                sock->c->rem_ip[0], sock->c->rem_ip[0], sock->c->rem_ip[0]);
+                        rem_addr.inet4.port = sock->c->rem_port;
+                        rem_addr.inet4.domain = TCPIP_AF_INET;
+                }
+
+                if (E_OK == TcpIp_TcpConnect(sk_id, &rem_addr)) {
+                        sock->d->sock_state = SOAD_SOCON_CONNECTED;
+                }
+        }
+}
+
+
+
+void soad_listen_tcp_socket(u16 sk_id, CarOsSocketType *sock) {
+        if (sock->c->is_tcp_server) {
+                if (E_OK == TcpIp_TcpListen(sk_id, 0)) {
+                        sock->d->sock_state = SOAD_SOCON_CONNECTWAIT; // listen requested successfully
+                }
+        }
+        else {
+                LOG_ERR("TCP client socket (id = %d) is asked to listen!", sk_id);
+        }
+}
+
+
+
+void soad_bind_tcp_socket(u16 sk_id, CarOsSocketType *sock) {
+        if (sock->c->is_tcp_server) {
+                // As per spec TcpIp_SoAdGetSocket() needs to be called, in order to
+                // get a socket from a pool. But Car-OS takes an approach to keep all
+                // sockets statically configured, hence this call is not made, for now.
+
+                // Hence, call TcpIp_Bind() directly, as below
+                if (E_OK == TcpIp_Bind(sk_id, sock->c->loc_ipaddr_id, sock->c->loc_port)) {
+                        sock->d->sock_state = SOAD_SOCON_BIND_REQ; // bind requested
+                }
+        }
+        else {
+                // binding & listening are not required for client socket, hence
+                sock->d->sock_state = SOAD_SOCON_CONNECTWAIT;
+        }
+}
+
+
+
+///////////////////////////////////////////////////////////////////////////////
+// Scheduled functions
+void SoAd_MainFunction(void) {
+        uint16 s;
+        CarOsSocketType sock;
+
+        // loop through all configured sockets
+        for (s = 0; s < SOAD_TOTAL_SOCKET_CONNS; s++) {
+                sock.d = &SoAdSockDataBlock[s];
+                sock.c = &SoAdSocketConnectionConfigs[s];
+
+                // handle open requested sockets
+                if (sock.d->sock_state == SOAD_SOCON_OPEN_REQ) {
+                        if (sock.c->protocol == TCPIP_IPPROTO_TCP) {
+                                soad_bind_tcp_socket(s, &sock);
+                        }
+                        #if 0
+                        else if (sock.c->protocol == TCPIP_IPPROTO_UDP) {
+                                soad_bind_udp_socket(s, &sock));
+                        }
+                        #endif
+                }
+
+                // handle bind requested sockets
+                if (sock.d->sock_state == SOAD_SOCON_BIND_REQ) {
+                        if (sock.c->protocol == TCPIP_IPPROTO_TCP) {
+                                soad_listen_tcp_socket(s, &sock);
+                        }
+                        #if 0
+                        else if (sock.c->protocol == TCPIP_IPPROTO_UDP) {
+                                soad_listen_udp_socket(s, &sock));
+                        }
+                        #endif
+                }
+
+                // handle sockets in connecting phase
+                if (sock.d->sock_state == SOAD_SOCON_CONNECTWAIT) {
+                        if (sock.c->protocol == TCPIP_IPPROTO_TCP) {
+                                soad_connect_tcp_socket(s, &sock);
+                        }
+                        #if 0
+                        else if (sock.c->protocol == TCPIP_IPPROTO_UDP) {
+                                soad_connect_udp_socket(s, &sock));
+                        }
+                        #endif
+                }
+
+                // handle sockets in connecting phase
+                if (sock.d->sock_state == SOAD_SOCON_CONNECTED) {
+                        // tbd
+                }
+        }
 }
